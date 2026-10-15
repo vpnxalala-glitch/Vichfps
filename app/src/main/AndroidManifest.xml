@@ -1,5 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:allowBackup="true" android:label="Vich Optimizer" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:supportsRtl="true">
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_vich_logo"
+        android:roundIcon="@drawable/ic_vich_logo"
+        android:label="Vich Optimizer"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
