@@ -181,6 +181,7 @@ private fun OptimizerScreen(activity: MainActivity) {
                 Metric("Оперативная память", fmt(stats.totalRam - stats.freeRam) + " используется · " + fmt(stats.freeRam) + " доступно", stats.totalRam - stats.freeRam, stats.totalRam, Icons.Default.Memory)
                 Metric("Батарея", stats.battery.toString() + "% · температура " + if (stats.temp > 0) String.format(Locale.getDefault(), "%.1f°C", stats.temp) else "н/д", 100L - stats.battery.toLong(), 100L, Icons.Default.BatteryChargingFull)
                 Text("ПРИЛОЖЕНИЯ · КЭШ ПО УБЫВАНИЮ", color = Accent, fontWeight = FontWeight.Bold)
+                Text("Список может быть неполным: видимость установленных пакетов и доступ к их статистике зависят от разрешений и ограничений Android/правил распространения. Пропущенные приложения не считаются приложениями с нулевым кэшем.", color = Muted, fontSize = 11.sp)
                 if (scan == null) Text("Сначала запусти сканирование.", color = Muted, fontSize = 12.sp)
                 scan?.apps?.take(80)?.forEach { app ->
                     Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
@@ -245,7 +246,13 @@ private fun OptimizerScreen(activity: MainActivity) {
                     }
                 }
                 Text("ФАЙЛЫ ОБЩЕЙ ПАПКИ", color = Accent, fontWeight = FontWeight.Bold)
-                Text("Android 11+ ограничивает массовое удаление файлов в Downloads. Без широкого доступа или подтверждения владельца приложение не может молча удалять файлы. Безопасная реализация должна показывать список найденных кандидатов и запрашивать подтверждение Android перед удалением. Автоматическое удаление не включено, чтобы не потерять пользовательские файлы.", color = Muted, fontSize = 12.sp)
+                Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF171B29))) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("Удаление чужих и защищённых файлов", color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Text("НЕДОСТУПНО обычному приложению без root или системных привилегий. Android изолирует личные файлы других приложений.", color = Color.Gray, fontSize = 11.sp)
+                    }
+                }
+                Text("Очистка общих папок (например, Downloads) пока не выполняется автоматически. Для доступных пользователю файлов нужна отдельная реализация выбора файлов и подтверждение удаления средствами Android. Файлы не удаляются молча.", color = Muted, fontSize = 12.sp)
                 Text("ФОНОВЫЙ МОНИТОРИНГ", color = Accent, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
