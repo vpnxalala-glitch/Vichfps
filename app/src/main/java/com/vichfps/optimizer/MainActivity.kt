@@ -1,27 +1,29 @@
 package com.vichfps.optimizer
 
 import android.app.ActivityManager
+import android.app.AppOpsManager
+import android.app.usage.StorageStatsManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Environment
+import android.os.Process
 import android.os.StatFs
+import android.os.storage.StorageManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -29,21 +31,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 private val Bg = Color(0xFF050713)
 private val Panel = Color(0xFF10172A)
 private val Accent = Color(0xFF00E5FF)
-private val Mint = Color(0xFFB42BFF)
+private val Purple = Color(0xFFB42BFF)
 private val Muted = Color(0xFF9BA8BD)
 private const val RELEASES_URL = "https://github.com/vpnxalala-glitch/Vichfps/releases/latest"
+private const val USAGE_PERMISSION = "android:get_usage_stats"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,154 +57,186 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class DeviceStats(
-    val totalStorage: Long, val freeStorage: Long, val totalRam: Long,
-    val freeRam: Long, val battery: Int, val batteryTemp: Float
-)
+private data class Stats(val total: Long, val free: Long, val totalRam: Long, val freeRam: Long, val battery: Int, val temp: Float)
+private data class AppInfo(val label: String, val pkg: String, val cache: Long, val usedMs: Long)
+private data class Scan(val apps: List<AppInfo>, val ownCache: Long, val skipped: Int)
 
-private fun readStats(context: Context): DeviceStats {
+private fun readStats(c: Context): Stats {
     val fs = StatFs(Environment.getDataDirectory().path)
-    val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-    val memory = ActivityManager.MemoryInfo()
-    manager.getMemoryInfo(memory)
-    val batteryIntent = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-    val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-    val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-    val temp = (batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f
-    return DeviceStats(fs.totalBytes, fs.availableBytes, memory.totalMem, memory.availMem,
-        if (level >= 0 && scale > 0) level * 100 / scale else 0, temp)
+    val am = c.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+    val mem = ActivityManager.MemoryInfo()
+    am.getMemoryInfo(mem)
+    val b = c.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val level = b?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+    val scale = b?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+    return Stats(fs.totalBytes, fs.availableBytes, mem.totalMem, mem.availMem,
+        if (level >= 0 && scale > 0) level * 100 / scale else 0,
+        (b?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f)
 }
 
-private fun bytes(value: Long): String {
-    val safeValue = value.coerceAtLeast(0L)
-    val gb = safeValue / (1024.0 * 1024.0 * 1024.0)
-    return if (gb >= 1) String.format(Locale.getDefault(), "%.1f ГБ", gb)
-    else String.format(Locale.getDefault(), "%.0f МБ", safeValue / (1024.0 * 1024.0))
+private fun hasUsage(c: Context): Boolean {
+    val ops = c.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+    @Suppress("DEPRECATION")
+    return ops.checkOpNoThrow(USAGE_PERMISSION, Process.myUid(), c.packageName) == AppOpsManager.MODE_ALLOWED
+}
+
+private fun scanApps(c: Context): Scan {
+    val pm = c.packageManager
+    val sm = c.getSystemService(Context.STORAGE_SERVICE) as StorageStatsManager
+    val usage = if (hasUsage(c)) {
+        (c.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager)
+            .queryAndAggregateUsageStats(System.currentTimeMillis() - 86400000L, System.currentTimeMillis())
+    } else emptyMap()
+    var skipped = 0
+    val result = pm.getInstalledApplications(0).mapNotNull { app ->
+        if (app.packageName == c.packageName) return@mapNotNull null
+        try {
+            val size = sm.queryStatsForPackage(StorageManager.UUID_DEFAULT, app.packageName, android.os.UserHandle.getUserHandleForUid(app.uid))
+            AppInfo(pm.getApplicationLabel(app).toString(), app.packageName, size.cacheBytes,
+                usage[app.packageName]?.totalTimeInForeground ?: 0L)
+        } catch (_: Exception) { skipped++; null }
+    }.sortedByDescending { it.cache }
+    val own = c.cacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    return Scan(result, own, skipped)
+}
+
+private fun fmt(n: Long): String {
+    val mb = n.coerceAtLeast(0L) / 1048576.0
+    return if (mb >= 1024) String.format(Locale.getDefault(), "%.1f ГБ", mb / 1024)
+    else String.format(Locale.getDefault(), "%.0f МБ", mb)
 }
 
 @Composable
-private fun OptimizerScreen(activity: ComponentActivity) {
+private fun OptimizerScreen(activity: MainActivity) {
     var stats by remember { mutableStateOf(readStats(activity)) }
-    var message by remember { mutableStateOf("Устройство готово к проверке") }
-    var scanning by remember { mutableStateOf(false) }
-    val storageUsed = if (stats.totalStorage > 0) ((stats.totalStorage - stats.freeStorage).toFloat() / stats.totalStorage).coerceIn(0f, 1f) else 0f
-    val ramUsed = if (stats.totalRam > 0) ((stats.totalRam - stats.freeRam).toFloat() / stats.totalRam).coerceIn(0f, 1f) else 0f
-    val animatedStorage by animateFloatAsState(storageUsed, label = "storage")
-    val animatedRam by animateFloatAsState(ramUsed, label = "ram")
-
-    MaterialTheme(colorScheme = darkColorScheme(primary = Accent, secondary = Mint, background = Bg, surface = Panel, onBackground = Color.White, onSurface = Color.White)) {
+    var scan by remember { mutableStateOf<Scan?>(null) }
+    var status by remember { mutableStateOf("Сканирование ещё не запускалось") }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    MaterialTheme(colorScheme = darkColorScheme(primary = Accent, secondary = Purple, background = Bg, surface = Panel)) {
         Surface(Modifier.fillMaxSize(), color = Bg) {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Column {
-                        Text("VICH", color = Color.White, fontSize = 29.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-                        Text("OPTIMIZER  /  SMART CONTROL", color = Accent, fontSize = 10.sp, letterSpacing = 1.sp)
+                        Text("VICH", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
+                        Text("OPTIMIZER / REAL SCAN", color = Accent, fontSize = 10.sp)
                     }
-                    // Square, non-rounded brand tile.
                     Box(Modifier.size(58.dp).background(Color(0xFF070A18)), contentAlignment = Alignment.Center) {
                         Text("V", color = Accent, fontSize = 48.sp, fontWeight = FontWeight.Black)
-                        Text("🚀", modifier = Modifier.align(Alignment.TopEnd).padding(1.dp), fontSize = 20.sp)
+                        Text("🚀", Modifier.align(Alignment.TopEnd), fontSize = 19.sp)
                     }
                 }
-                Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.background(Brush.linearGradient(listOf(Color(0xFF172647), Color(0xFF10172A)))).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("СОСТОЯНИЕ УСТРОЙСТВА", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
-                        Spacer(Modifier.height(14.dp))
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(142.dp)) {
-                            CircularProgressIndicator(progress = { 1f }, modifier = Modifier.fillMaxSize(), color = Color(0xFF24314D), strokeWidth = 8.dp)
-                            CircularProgressIndicator(progress = { 1f - storageUsed }, modifier = Modifier.fillMaxSize(), color = Accent, strokeWidth = 8.dp, trackColor = Color.Transparent)
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.Speed, null, tint = Mint, modifier = Modifier.size(27.dp))
-                                Text("ГОТОВ", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                                Text("к проверке", color = Muted, fontSize = 11.sp)
+                Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+                    Column(Modifier.background(Brush.linearGradient(listOf(Color(0xFF172647), Panel))).padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (scan == null) "АНАЛИЗ НЕ ЗАПУЩЕН" else "СКАНИРОВАНИЕ ЗАВЕРШЕНО", color = Accent, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        Text(status, color = Muted, fontSize = 12.sp)
+                        if (scan != null) {
+                            Text("Измеряемый кэш приложений: " + fmt(scan!!.apps.sumOf { it.cache }), color = Accent)
+                            Text("Кэш самого оптимизатора: " + fmt(scan!!.ownCache), color = Purple)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Button(enabled = !busy, onClick = {
+                            scope.launch {
+                                busy = true
+                                status = "Сканируем хранилище и приложения…"
+                                val res = withContext(Dispatchers.IO) { runCatching { scanApps(activity) } }
+                                res.onSuccess { scan = it; status = "Готово. Не удалось прочитать: " + it.skipped + " приложений." }
+                                    .onFailure { status = "Ошибка сканирования: " + (it.message ?: "неизвестно") }
+                                stats = readStats(activity)
+                                busy = false
                             }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        Text(message, color = Muted, fontSize = 12.sp)
-                        Spacer(Modifier.height(14.dp))
-                        Button(onClick = {
-                            scanning = true
-                            stats = readStats(activity)
-                            message = "Данные обновлены. Файлы не удалялись."
-                            scanning = false
-                        }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) {
-                            if (scanning) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White) else Icon(Icons.Default.Speed, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("ПРОВЕРИТЬ ТЕЛЕФОН", fontWeight = FontWeight.Bold)
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Speed, null); Spacer(Modifier.width(8.dp)); Text("СКАНИРОВАТЬ ТЕЛЕФОН")
                         }
                     }
                 }
-                Text("МОНИТОРИНГ", color = Accent, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
-                MetricCard("Внутренняя память", bytes(stats.totalStorage - stats.freeStorage) + " занято", bytes(stats.freeStorage) + " свободно", animatedStorage, Icons.Default.Storage, Accent)
-                MetricCard("Оперативная память", bytes(stats.totalRam - stats.freeRam) + " используется", bytes(stats.freeRam) + " доступно", animatedRam, Icons.Default.Memory, Mint)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SmallMetric("Батарея", stats.battery.toString() + "%", Icons.Default.BatteryChargingFull, Accent, Modifier.weight(1f))
-                    SmallMetric("Температура", if (stats.batteryTemp > 0) String.format(Locale.getDefault(), "%.1f°C", stats.batteryTemp) else "Нет данных", Icons.Default.BatteryChargingFull, Mint, Modifier.weight(1f))
+                if (!hasUsage(activity)) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text("Доступ к статистике использования", color = Accent, fontWeight = FontWeight.Bold)
+                            Text("Необязательное специальное разрешение: нужно для времени использования приложений за 24 часа. Без него эта статистика недоступна.", color = Muted, fontSize = 12.sp)
+                            Button(onClick = { activity.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }) { Text("Выдать разрешение") }
+                        }
+                    }
                 }
-                Text("ИНСТРУМЕНТЫ", color = Accent, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
-                ToolCard("Обновить приложение", "Открыть последнюю версию Vich Optimizer", Icons.Default.SystemUpdate) {
+                Text("МОНИТОРИНГ", color = Accent, fontWeight = FontWeight.Bold)
+                Metric("Внутренняя память", fmt(stats.total - stats.free) + " занято · " + fmt(stats.free) + " свободно", stats.total - stats.free, stats.total, Icons.Default.Storage)
+                Metric("Оперативная память", fmt(stats.totalRam - stats.freeRam) + " используется · " + fmt(stats.freeRam) + " доступно", stats.totalRam - stats.freeRam, stats.totalRam, Icons.Default.Memory)
+                Metric("Батарея", stats.battery.toString() + "% · температура " + if (stats.temp > 0) String.format(Locale.getDefault(), "%.1f°C", stats.temp) else "н/д", 100L - stats.battery.toLong(), 100L, Icons.Default.BatteryChargingFull)
+                Text("ДЕЙСТВИЯ", color = Accent, fontWeight = FontWeight.Bold)
+                Action("Очистить кэш Vich Optimizer", "Удаляет только временные файлы этого приложения", Icons.Default.Storage, !busy) {
+                    scope.launch {
+                        busy = true
+                        val before = withContext(Dispatchers.IO) { activity.cacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
+                        withContext(Dispatchers.IO) { activity.cacheDir.listFiles()?.forEach { it.deleteRecursively() } }
+                        scan = null
+                        status = "Кэш приложения очищен. До очистки: " + fmt(before)
+                        stats = readStats(activity)
+                        busy = false
+                    }
+                }
+                Action("Освободить ОЗУ", "Запросить завершение доступных фоновых процессов и замерить изменение доступной памяти", Icons.Default.Memory, !busy) {
+                    scope.launch {
+                        busy = true
+                        val before = withContext(Dispatchers.IO) { readStats(activity).freeRam }
+                        val apps = scan?.apps ?: withContext(Dispatchers.IO) { runCatching { scanApps(activity).apps }.getOrDefault(emptyList()) }
+                        val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                        withContext(Dispatchers.IO) {
+                            apps.take(40).forEach { runCatching { am.killBackgroundProcesses(it.pkg) } }
+                            activity.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+                            Thread.sleep(700)
+                        }
+                        stats = readStats(activity)
+                        status = "Доступная ОЗУ изменилась на +" + fmt((stats.freeRam - before).coerceAtLeast(0)) + ". Android может снова использовать память."
+                        busy = false
+                    }
+                }
+                Action("Анализ активности приложений", "Время на переднем плане за 24 часа — не точный расход батареи", Icons.Default.BatteryChargingFull, scan != null) {
+                    val top = scan?.apps?.sortedByDescending { it.usedMs }?.take(5).orEmpty()
+                    status = if (!hasUsage(activity)) "Для этого списка выдай доступ к статистике использования выше."
+                    else if (top.isEmpty()) "Нет доступных данных. Запусти сканирование ещё раз."
+                    else "Топ по времени: " + top.joinToString { it.label + " — " + it.usedMs / 60000 + " мин" }
+                }
+                Action("Обновить приложение", "Открыть страницу релизов", Icons.Default.SystemUpdate, true) {
                     activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_URL)))
                 }
-                ToolCard("Освободить место", "Открыть системное управление хранилищем", Icons.Default.Storage) {
-                    val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
-                    activity.startActivity(if (intent.resolveActivity(activity.packageManager) != null) intent else Intent(Settings.ACTION_SETTINGS))
-                }
-                ToolCard("Управление приложениями", "Проверить приложения и очистить данные вручную", Icons.Default.Settings) {
-                    activity.startActivity(Intent(Settings.ACTION_APPLICATION_SETTINGS))
-                }
-                ToolCard("Экономия батареи", "Открыть системные настройки энергосбережения", Icons.Default.BatteryChargingFull) {
-                    val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
-                    activity.startActivity(if (intent.resolveActivity(activity.packageManager) != null) intent else Intent(Settings.ACTION_SETTINGS))
-                }
-                Text("Обновления устанавливаются поверх текущей версии, если APK подписан тем же ключом. Android ограничивает автоматическую очистку чужих кэшей; удаление файлов выполняется только через системные инструменты.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
-                Spacer(Modifier.height(10.dp))
+                Text("Ограничения Android: без root/системной привилегии нельзя удалять кэш других приложений напрямую. StorageStatsManager измеряет его, но не удаляет. Android также не даёт гарантировать очистку ОЗУ, читать точный расход батареи по каждому приложению или включать энергосбережение без системного подтверждения. Файлы в закрытых каталогах других приложений недоступны.", color = Muted, fontSize = 11.sp)
             }
         }
     }
 }
 
 @Composable
-private fun MetricCard(title: String, used: String, free: String, progress: Float, icon: ImageVector, color: Color) {
-    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+private fun Metric(title: String, detail: String, used: Long, total: Long, icon: ImageVector) {
+    val p = if (total > 0) (used.toFloat() / total).coerceIn(0f, 1f) else 0f
+    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(color.copy(alpha = .13f)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = color) }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
+                Icon(icon, null, tint = Accent)
+                Spacer(Modifier.width(10.dp))
+                Column {
                     Text(title, fontWeight = FontWeight.SemiBold)
-                    Text(used, color = Muted, fontSize = 12.sp)
+                    Text(detail, color = Muted, fontSize = 12.sp)
                 }
-                Text((progress * 100).toInt().toString() + "%", color = color, fontWeight = FontWeight.Bold)
             }
-            LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape), color = color, trackColor = Color(0xFF293246))
-            Text(free, color = Muted, fontSize = 12.sp)
+            Spacer(Modifier.height(9.dp))
+            LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Color(0xFF293246))
         }
     }
 }
 
 @Composable
-private fun SmallMetric(title: String, value: String, icon: ImageVector, color: Color, modifier: Modifier = Modifier) {
-    Card(modifier = modifier, shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(icon, null, tint = color, modifier = Modifier.size(22.dp))
-            Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text(title, color = Muted, fontSize = 12.sp)
-        }
-    }
-}
-
-@Composable
-private fun ToolCard(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
-    Card(onClick = onClick, shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(43.dp).clip(RoundedCornerShape(12.dp)).background(Accent.copy(alpha = .12f)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Accent) }
-            Spacer(Modifier.width(13.dp))
+private fun Action(title: String, subtitle: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
+    Card(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = Accent, modifier = Modifier.size(27.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(3.dp))
-                Text(subtitle, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+                Text(subtitle, color = Muted, fontSize = 12.sp)
             }
-            Text("›", color = Accent, fontSize = 28.sp)
+            Text("›", color = Accent, fontSize = 25.sp)
         }
     }
 }
