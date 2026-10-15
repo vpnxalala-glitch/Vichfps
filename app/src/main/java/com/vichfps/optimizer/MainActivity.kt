@@ -3,6 +3,7 @@ package com.vichfps.optimizer
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Environment
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,11 +38,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 
-private val Bg = Color(0xFF090D16)
-private val Panel = Color(0xFF141B29)
-private val Accent = Color(0xFF6C8CFF)
-private val Mint = Color(0xFF55E6C1)
+private val Bg = Color(0xFF050713)
+private val Panel = Color(0xFF10172A)
+private val Accent = Color(0xFF00E5FF)
+private val Mint = Color(0xFFB42BFF)
 private val Muted = Color(0xFF9BA8BD)
+private const val RELEASES_URL = "https://github.com/vpnxalala-glitch/Vichfps/releases/latest"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,40 +71,43 @@ private fun readStats(context: Context): DeviceStats {
 }
 
 private fun bytes(value: Long): String {
-    val gb = value / (1024.0 * 1024.0 * 1024.0)
+    val safeValue = value.coerceAtLeast(0L)
+    val gb = safeValue / (1024.0 * 1024.0 * 1024.0)
     return if (gb >= 1) String.format(Locale.getDefault(), "%.1f ГБ", gb)
-    else String.format(Locale.getDefault(), "%.0f МБ", value / (1024.0 * 1024.0))
+    else String.format(Locale.getDefault(), "%.0f МБ", safeValue / (1024.0 * 1024.0))
 }
 
 @Composable
 private fun OptimizerScreen(activity: ComponentActivity) {
     var stats by remember { mutableStateOf(readStats(activity)) }
-    var message by remember { mutableStateOf("Проверка устройства завершена") }
+    var message by remember { mutableStateOf("Устройство готово к проверке") }
     var scanning by remember { mutableStateOf(false) }
-    val storageUsed = if (stats.totalStorage > 0) (stats.totalStorage - stats.freeStorage).toFloat() / stats.totalStorage else 0f
-    val ramUsed = if (stats.totalRam > 0) (stats.totalRam - stats.freeRam).toFloat() / stats.totalRam else 0f
+    val storageUsed = if (stats.totalStorage > 0) ((stats.totalStorage - stats.freeStorage).toFloat() / stats.totalStorage).coerceIn(0f, 1f) else 0f
+    val ramUsed = if (stats.totalRam > 0) ((stats.totalRam - stats.freeRam).toFloat() / stats.totalRam).coerceIn(0f, 1f) else 0f
     val animatedStorage by animateFloatAsState(storageUsed, label = "storage")
     val animatedRam by animateFloatAsState(ramUsed, label = "ram")
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, secondary = Mint, background = Bg, surface = Panel, onBackground = Color.White, onSurface = Color.White)) {
         Surface(Modifier.fillMaxSize(), color = Bg) {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Column {
-                        Text("VICH", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
-                        Text("OPTIMIZER  •  УМНЫЙ КОНТРОЛЬ", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp)
+                        Text("VICH", color = Color.White, fontSize = 29.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
+                        Text("OPTIMIZER  /  SMART CONTROL", color = Accent, fontSize = 10.sp, letterSpacing = 1.sp)
                     }
-                    Box(Modifier.size(46.dp).clip(CircleShape).background(Accent.copy(alpha = .15f)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Speed, null, tint = Accent, modifier = Modifier.size(25.dp))
+                    // Square, non-rounded brand tile.
+                    Box(Modifier.size(58.dp).background(Color(0xFF070A18)), contentAlignment = Alignment.Center) {
+                        Text("V", color = Accent, fontSize = 48.sp, fontWeight = FontWeight.Black)
+                        Text("🚀", modifier = Modifier.align(Alignment.TopEnd).padding(1.dp), fontSize = 20.sp)
                     }
                 }
-                Card(shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.background(Brush.linearGradient(listOf(Color(0xFF202C49), Panel))).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.background(Brush.linearGradient(listOf(Color(0xFF172647), Color(0xFF10172A)))).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("СОСТОЯНИЕ УСТРОЙСТВА", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
                         Spacer(Modifier.height(14.dp))
                         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(142.dp)) {
-                            CircularProgressIndicator(progress = { 1f }, modifier = Modifier.fillMaxSize(), color = Color(0xFF293650), strokeWidth = 8.dp)
-                            CircularProgressIndicator(progress = { 1f - storageUsed }, modifier = Modifier.fillMaxSize(), color = Mint, strokeWidth = 8.dp, trackColor = Color.Transparent)
+                            CircularProgressIndicator(progress = { 1f }, modifier = Modifier.fillMaxSize(), color = Color(0xFF24314D), strokeWidth = 8.dp)
+                            CircularProgressIndicator(progress = { 1f - storageUsed }, modifier = Modifier.fillMaxSize(), color = Accent, strokeWidth = 8.dp, trackColor = Color.Transparent)
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(Icons.Default.Speed, null, tint = Mint, modifier = Modifier.size(27.dp))
                                 Text("ГОТОВ", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -114,35 +120,38 @@ private fun OptimizerScreen(activity: ComponentActivity) {
                         Button(onClick = {
                             scanning = true
                             stats = readStats(activity)
-                            message = "Проверка обновлена. Файлы не удалялись."
+                            message = "Данные обновлены. Файлы не удалялись."
                             scanning = false
-                        }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(17.dp)) {
+                        }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) {
                             if (scanning) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White) else Icon(Icons.Default.Speed, null)
                             Spacer(Modifier.width(8.dp))
                             Text("ПРОВЕРИТЬ ТЕЛЕФОН", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
-                Text("МОНИТОРИНГ", color = Muted, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
+                Text("МОНИТОРИНГ", color = Accent, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
                 MetricCard("Внутренняя память", bytes(stats.totalStorage - stats.freeStorage) + " занято", bytes(stats.freeStorage) + " свободно", animatedStorage, Icons.Default.Storage, Accent)
                 MetricCard("Оперативная память", bytes(stats.totalRam - stats.freeRam) + " используется", bytes(stats.freeRam) + " доступно", animatedRam, Icons.Default.Memory, Mint)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SmallMetric("Батарея", stats.battery.toString() + "%", Icons.Default.BatteryChargingFull, Mint, Modifier.weight(1f))
-                    SmallMetric("Температура", if (stats.batteryTemp > 0) String.format(Locale.getDefault(), "%.1f°C", stats.batteryTemp) else "Нет данных", Icons.Default.BatteryChargingFull, Accent, Modifier.weight(1f))
+                    SmallMetric("Батарея", stats.battery.toString() + "%", Icons.Default.BatteryChargingFull, Accent, Modifier.weight(1f))
+                    SmallMetric("Температура", if (stats.batteryTemp > 0) String.format(Locale.getDefault(), "%.1f°C", stats.batteryTemp) else "Нет данных", Icons.Default.BatteryChargingFull, Mint, Modifier.weight(1f))
                 }
-                Text("ИНСТРУМЕНТЫ", color = Muted, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
+                Text("ИНСТРУМЕНТЫ", color = Accent, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
+                ToolCard("Обновить приложение", "Открыть последнюю версию Vich Optimizer", Icons.Default.SystemUpdate) {
+                    activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_URL)))
+                }
                 ToolCard("Освободить место", "Открыть системное управление хранилищем", Icons.Default.Storage) {
                     val intent = Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
                     activity.startActivity(if (intent.resolveActivity(activity.packageManager) != null) intent else Intent(Settings.ACTION_SETTINGS))
                 }
-                ToolCard("Управление приложениями", "Проверить приложения и очистить их данные вручную", Icons.Default.Settings) {
+                ToolCard("Управление приложениями", "Проверить приложения и очистить данные вручную", Icons.Default.Settings) {
                     activity.startActivity(Intent(Settings.ACTION_APPLICATION_SETTINGS))
                 }
                 ToolCard("Экономия батареи", "Открыть системные настройки энергосбережения", Icons.Default.BatteryChargingFull) {
                     val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
                     activity.startActivity(if (intent.resolveActivity(activity.packageManager) != null) intent else Intent(Settings.ACTION_SETTINGS))
                 }
-                Text("Android ограничивает доступ к чужим кэшам и фоновым процессам. Приложение показывает реальные данные и открывает системные инструменты; файлы без подтверждения не удаляются.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                Text("Обновления устанавливаются поверх текущей версии, если APK подписан тем же ключом. Android ограничивает автоматическую очистку чужих кэшей; удаление файлов выполняется только через системные инструменты.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                 Spacer(Modifier.height(10.dp))
             }
         }
@@ -151,10 +160,10 @@ private fun OptimizerScreen(activity: ComponentActivity) {
 
 @Composable
 private fun MetricCard(title: String, used: String, free: String, progress: Float, icon: ImageVector, color: Color) {
-    Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(color.copy(alpha = .13f)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = color) }
+                Box(Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(color.copy(alpha = .13f)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = color) }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(title, fontWeight = FontWeight.SemiBold)
@@ -170,7 +179,7 @@ private fun MetricCard(title: String, used: String, free: String, progress: Floa
 
 @Composable
 private fun SmallMetric(title: String, value: String, icon: ImageVector, color: Color, modifier: Modifier = Modifier) {
-    Card(modifier = modifier, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+    Card(modifier = modifier, shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(icon, null, tint = color, modifier = Modifier.size(22.dp))
             Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -181,9 +190,9 @@ private fun SmallMetric(title: String, value: String, icon: ImageVector, color: 
 
 @Composable
 private fun ToolCard(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
-    Card(onClick = onClick, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
+    Card(onClick = onClick, shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(43.dp).clip(RoundedCornerShape(14.dp)).background(Accent.copy(alpha = .13f)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Accent) }
+            Box(Modifier.size(43.dp).clip(RoundedCornerShape(12.dp)).background(Accent.copy(alpha = .12f)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Accent) }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, fontWeight = FontWeight.SemiBold)
