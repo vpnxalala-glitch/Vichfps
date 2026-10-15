@@ -5,9 +5,11 @@ import android.app.AppOpsManager
 import android.app.usage.StorageStatsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Process
@@ -15,6 +17,7 @@ import android.os.StatFs
 import android.os.storage.StorageManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -53,6 +56,25 @@ private const val RELEASES_URL = "https://github.com/vpnxalala-glitch/Vichfps/re
 private const val USAGE_PERMISSION = "android:get_usage_stats"
 
 class MainActivity : ComponentActivity() {
+    private var notificationPermissionCallback: ((Boolean) -> Unit)? = null
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            notificationPermissionCallback?.invoke(granted)
+            notificationPermissionCallback = null
+        }
+
+    fun requestNotificationPermission(onResult: (Boolean) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            onResult(true)
+            return
+        }
+        notificationPermissionCallback = onResult
+        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { OptimizerScreen(this) }
@@ -231,14 +253,23 @@ private fun OptimizerScreen(activity: MainActivity) {
                         Text("Уведомление при заполнении внутренней памяти более чем на 90%", color = Muted, fontSize = 11.sp)
                     }
                     Switch(checked = autoMonitor, onCheckedChange = { enabled ->
-                        autoMonitor = enabled
-                        val wm = WorkManager.getInstance(activity)
                         if (enabled) {
-                            val request = PeriodicWorkRequestBuilder<StorageMonitorWorker>(6, TimeUnit.HOURS).build()
-                            wm.enqueueUniquePeriodicWork("vich_storage_monitor", ExistingPeriodicWorkPolicy.UPDATE, request)
-                            status = "Фоновая проверка включена (интервал не чаще 6 часов; Android управляет временем запуска)."
+                            activity.requestNotificationPermission { granted ->
+                                if (granted) {
+                                    autoMonitor = true
+                                    val request = PeriodicWorkRequestBuilder<StorageMonitorWorker>(6, TimeUnit.HOURS).build()
+                                    WorkManager.getInstance(activity).enqueueUniquePeriodicWork(
+                                        "vich_storage_monitor", ExistingPeriodicWorkPolicy.UPDATE, request
+                                    )
+                                    status = "Фоновая проверка включена. Android управляет временем запуска; уведомления разрешены."
+                                } else {
+                                    autoMonitor = false
+                                    status = "Уведомления запрещены. Фоновый мониторинг не включён, потому что предупреждения не смогут появиться."
+                                }
+                            }
                         } else {
-                            wm.cancelUniqueWork("vich_storage_monitor")
+                            autoMonitor = false
+                            WorkManager.getInstance(activity).cancelUniqueWork("vich_storage_monitor")
                             status = "Фоновая проверка отключена."
                         }
                     })
